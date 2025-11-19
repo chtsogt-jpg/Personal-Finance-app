@@ -1,11 +1,7 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import json
-from collections import Counter
-import numpy as np
 
 # Page configuration
 st.set_page_config(
@@ -170,29 +166,28 @@ if page == "Dashboard":
     
     with col1:
         balance = calculate_balance()
-        st.metric("💵 Current Balance", f"${balance:,.2f}", 
-                 delta=f"${balance:,.2f}" if balance > 0 else f"-${abs(balance):,.2f}")
+        st.metric("💵 Balance", f"${balance:,.2f}")
     
     with col2:
         if not df.empty:
             income = df[df['type'] == 'Income']['amount'].sum()
         else:
             income = 0
-        st.metric("📈 Total Income", f"${income:,.2f}")
+        st.metric("📈 Income", f"${income:,.2f}")
     
     with col3:
         if not df.empty:
             expenses = df[df['type'] == 'Expense']['amount'].sum()
         else:
             expenses = 0
-        st.metric("📉 Total Expenses", f"${expenses:,.2f}")
+        st.metric("📉 Expenses", f"${expenses:,.2f}")
     
     with col4:
         if not df.empty:
             avg_transaction = df['amount'].mean()
         else:
             avg_transaction = 0
-        st.metric("📊 Avg Transaction", f"${avg_transaction:,.2f}")
+        st.metric("📊 Avg", f"${avg_transaction:,.2f}")
     
     # Budget alerts
     alerts = check_budget_alerts(df)
@@ -203,7 +198,7 @@ if page == "Dashboard":
     
     st.divider()
     
-    # Charts
+    # Summary charts and tables
     if not df.empty:
         col1, col2 = st.columns(2)
         
@@ -212,23 +207,23 @@ if page == "Dashboard":
             expense_df = df[df['type'] == 'Expense']
             if not expense_df.empty:
                 category_spending = expense_df.groupby('category')['amount'].sum().reset_index()
-                fig = px.pie(category_spending, values='amount', names='category',
-                            title='Expense Distribution', hole=0.4)
-                st.plotly_chart(fig, use_container_width=True)
+                category_spending.columns = ['Category', 'Amount']
+                category_spending = category_spending.sort_values('Amount', ascending=False)
+                st.bar_chart(category_spending.set_index('Category'))
         
         with col2:
-            st.subheader("Income vs Expenses Timeline")
-            daily_data = df.groupby(['date', 'type'])['amount'].sum().reset_index()
-            fig = px.bar(daily_data, x='date', y='amount', color='type',
-                        title='Daily Comparison',
-                        color_discrete_map={'Income': '#2ecc71', 'Expense': '#e74c3c'})
-            st.plotly_chart(fig, use_container_width=True)
+            st.subheader("Income vs Expenses")
+            daily_summary = df.groupby('type')['amount'].sum().reset_index()
+            daily_summary.columns = ['Type', 'Total']
+            st.bar_chart(daily_summary.set_index('Type'))
         
         # Recent transactions
         st.subheader("🔄 Recent Transactions")
         recent = df.sort_values('date', ascending=False).head(8)
         st.dataframe(recent[['date', 'category', 'amount', 'type', 'description']], 
                     use_container_width=True, hide_index=True)
+    else:
+        st.info("👈 Add your first transaction in the 'Add Transaction' page!")
 
 elif page == "Add Transaction":
     st.header("➕ Add New Transaction")
@@ -292,31 +287,13 @@ elif page == "Budgets":
                     'Budget': f"${budget_amount:.2f}",
                     'Spent': f"${spending:.2f}",
                     'Remaining': f"${remaining:.2f}",
-                    'Usage': f"{percentage:.1f}%"
+                    'Usage %': f"{percentage:.1f}%"
                 })
             
             if budget_data:
                 st.dataframe(budget_data, use_container_width=True, hide_index=True)
         else:
             st.info("No budgets set yet")
-    
-    # Budget vs Actual visualization
-    if st.session_state.budgets and not df.empty:
-        st.subheader("Budget Performance")
-        
-        budget_viz_data = []
-        for budget_key, budget_amount in st.session_state.budgets.items():
-            category = budget_key.split('_')[0]
-            spending = get_spending_by_category(df).get(category, 0)
-            
-            budget_viz_data.append({'Category': category, 'Amount': budget_amount, 'Type': 'Budget'})
-            budget_viz_data.append({'Category': category, 'Amount': spending, 'Type': 'Spent'})
-        
-        if budget_viz_data:
-            budget_df = pd.DataFrame(budget_viz_data)
-            fig = px.bar(budget_df, x='Category', y='Amount', color='Type', barmode='group',
-                        title='Budget vs Actual Spending')
-            st.plotly_chart(fig, use_container_width=True)
 
 elif page == "Goals":
     st.header("🎯 Savings Goals")
@@ -423,31 +400,22 @@ elif page == "Analytics":
             
             st.divider()
             
-            col1, col2 = st.columns(2)
+            # Monthly trends chart
+            st.subheader("Monthly Trends")
+            range_df_copy = range_df.copy()
+            range_df_copy['month'] = range_df_copy['date'].dt.to_period('M').astype(str)
+            monthly = range_df_copy.groupby(['month', 'type'])['amount'].sum().reset_index()
             
-            # Monthly trends
-            with col1:
-                st.subheader("Monthly Trends")
-                range_df_copy = range_df.copy()
-                range_df_copy['month'] = range_df_copy['date'].dt.to_period('M').astype(str)
-                monthly = range_df_copy.groupby(['month', 'type'])['amount'].sum().reset_index()
-                
-                fig = go.Figure()
-                for trans_type in monthly['type'].unique():
-                    type_data = monthly[monthly['type'] == trans_type]
-                    fig.add_trace(go.Bar(x=type_data['month'], y=type_data['amount'], name=trans_type))
-                fig.update_layout(barmode='group', title='Monthly Income vs Expenses')
-                st.plotly_chart(fig, use_container_width=True)
+            if not monthly.empty:
+                monthly_pivot = monthly.pivot(index='month', columns='type', values='amount').fillna(0)
+                st.line_chart(monthly_pivot)
             
-            # Top categories
-            with col2:
-                st.subheader("Top Spending Categories")
-                expense_df = range_df[range_df['type'] == 'Expense']
-                if not expense_df.empty:
-                    top_cat = expense_df.groupby('category')['amount'].sum().sort_values(ascending=False).head(5)
-                    fig = px.bar(top_cat, orientation='h', title='Top 5 Categories',
-                                labels={'value': 'Amount ($)', 'index': 'Category'})
-                    st.plotly_chart(fig, use_container_width=True)
+            # Top categories chart
+            st.subheader("Top Spending Categories")
+            expense_df = range_df[range_df['type'] == 'Expense']
+            if not expense_df.empty:
+                top_cat = expense_df.groupby('category')['amount'].sum().sort_values(ascending=False).head(5)
+                st.bar_chart(top_cat)
     else:
         st.info("No transactions to analyze")
 
@@ -476,13 +444,11 @@ elif page == "Insights":
             st.dataframe(insight_data, use_container_width=True, hide_index=True)
         
         with col2:
-            st.subheader("Spending Patterns")
+            st.subheader("Spending Patterns by Day")
             df['day_of_week'] = df['date'].dt.day_name()
-            dow_spending = df[df['type'] == 'Expense'].groupby('day_of_week')['amount'].sum()
-            
-            fig = px.bar(dow_spending, title='Spending by Day of Week',
-                        labels={'value': 'Amount ($)', 'index': 'Day'})
-            st.plotly_chart(fig, use_container_width=True)
+            dow_spending = df[df['type'] == 'Expense'].groupby('day_of_week')['amount'].sum().reset_index()
+            dow_spending.columns = ['Day', 'Amount']
+            st.bar_chart(dow_spending.set_index('Day'))
         
         st.divider()
         
@@ -490,15 +456,6 @@ elif page == "Insights":
         st.subheader("🔝 Top 10 Transactions")
         top_trans = get_top_transactions(df, 10)
         st.dataframe(top_trans, use_container_width=True, hide_index=True)
-        
-        # Spending trend
-        st.subheader("30-Day Spending Trend")
-        trend = get_trend_data(df, 30)
-        if trend is not None:
-            fig = px.line(trend, x='date', y='amount', color='type',
-                         title='Spending Trend (Last 30 Days)',
-                         markers=True)
-            st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Add transactions to view insights")
 
@@ -528,7 +485,7 @@ elif page == "About":
     #### Streamlit Concepts
     - Multi-page navigation
     - Advanced widgets and layouts
-    - Dynamic chart generation
+    - Dynamic data display
     - State management
     - User input validation
     - Performance optimization
@@ -568,11 +525,11 @@ elif page == "About":
     - CSV import/export
     
     ---
-    **Version**: 2.0 Advanced
+    **Version**: 2.1 Advanced (Simplified)
     **Last Updated**: 2025
     **Difficulty**: Intermediate to Advanced
     """)
 
 # Footer
 st.divider()
-st.caption(f"Advanced Finance Tracker v2.0 • Built with Streamlit • {len(st.session_state.transactions)} transactions tracked")
+st.caption(f"Advanced Finance Tracker v2.1 • Built with Streamlit • {len(st.session_state.transactions)} transactions tracked")
